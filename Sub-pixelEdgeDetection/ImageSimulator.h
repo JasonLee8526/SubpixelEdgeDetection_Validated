@@ -2,41 +2,52 @@
 
 #include <opencv2/opencv.hpp>
 #include <string>
+#include <vector>
+
+/**
+ * @struct YoloLabel
+ * @brief 存储 YOLO 格式的标签数据 (归一化后的中心坐标和宽高)
+ */
+struct YoloLabel {
+    int class_id;      // 类别 ID (通常为 0)
+    double x_center;   // 归一化中心 X (0-1)
+    double y_center;   // 归一化中心 Y (0-1)
+    double width;      // 归一化宽度 (0-1)
+    double height;     // 归一化高度 (0-1)
+};
 
 /**
  * @class ImageSimulator
- * @brief (Prompt 4) 模拟生成论文中的标准晶圆套刻标记图像。
- *
- * 该类根据输入的x, y方向的微米(um)级误差，
- * 生成一个带有模糊边缘的8位灰度图像。
+ * @brief 模拟生成标准及带有随机扰动的晶圆套刻标记图像，并自动生成标签。
  */
 class ImageSimulator {
 public:
-    /**
-     * @brief 构造函数，初始化转换因子。
-     * @param imgWidth 图像宽度 (论文中766像素对应50um)。
-     * @param physicalWidth_um 图像代表的物理宽度 (um)。
-     */
     ImageSimulator(int imgWidth = 766, double physicalWidth_um = 50.0);
 
-    /**
-     * @brief 生成一张模拟的套刻标记图像。
-     *
-     * (Prompt 4)
-     * 1. 创建黑色背景 (800x600)。
-     * 2. 绘制灰色外框。
-     * 3. 绘制稍亮的内框，并根据误差参数进行偏移。
-     * 4. 对整个图像应用高斯模糊以模拟非理想边缘。
-     *
-     * @param width 图像宽度 (像素)。
-     * @param height 图像高度 (像素)。
-     * @param errorX_um X方向的套刻误差 (微米)。
-     * @param errorY_um Y方向的套刻误差 (微米)。
-     * @return cv::Mat 8位灰度图像 (CV_8UC1)。
-     */
+    // 生成标准图 (不带随机性，不输出标签)
     cv::Mat generateStandardWaferImage(int width, int height, double errorX_um, double errorY_um);
 
-    // 公共转换因子
-    double PIX_TO_UM_FACTOR; ///< 像素到微米的转换因子
-    double UM_TO_PIX_FACTOR; ///< 微米到像素的转换因子
+    /**
+     * @brief 生成单张随机测试图像，并返回对应的 YOLO 标签。
+     * @param width 图像宽
+     * @param height 图像高
+     * @return std::pair<cv::Mat, YoloLabel> 图像和对应的标签数据
+     */
+    std::pair<cv::Mat, YoloLabel> generateRandomTestImage(int width, int height);
+
+    /**
+     * @brief 批量生成数据集 (图片 + txt标签)。
+     * @param n 生成数量
+     * @param imagesDir 图片保存目录
+     * @param labelsDir 标签保存目录
+     */
+    void generateDataset(int n, const std::string& imagesDir, const std::string& labelsDir);
+
+    double PIX_TO_UM_FACTOR;
+    double UM_TO_PIX_FACTOR;
+
+private:
+    cv::Mat drawBasePattern(int width, int height, double errorX_um, double errorY_um, int bgGray);
+    void addGaussianNoise(cv::Mat& img, double mean, double stddev);
+    void applyRandomRotation(cv::Mat& img, double angleDeg, int borderGray);
 };

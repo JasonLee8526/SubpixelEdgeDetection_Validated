@@ -1,7 +1,7 @@
 ﻿#include <iostream>
 #include <vector>
 #include <string>
-#include <iomanip> // 用于 std::setw, std::setprecision
+#include <iomanip>
 #include <numeric>
 
 #include "ImageSimulator.h"
@@ -9,10 +9,7 @@
 #include "Localization.h"
 #include "Utilities.h"
 
-/**
- * @struct ExperimentResult
- * @brief 存储一组实验的结果（平均误差和方差）。
- */
+// ... (ExperimentResult 结构体和 calculateStatistics 函数保持不变) ...
 struct ExperimentResult {
     double mean_error_x = 0.0;
     double mean_error_y = 0.0;
@@ -20,40 +17,27 @@ struct ExperimentResult {
     double variance_y = 0.0;
 };
 
-/**
- * @brief (Prompt 8) 计算一组误差数据的平均值和方差。
- * @param errors 误差数据向量。
- * @param out_mean [out] 平均值。
- * @param out_variance [out] 方差。
- */
 void calculateStatistics(const std::vector<double>& errors, double& out_mean, double& out_variance) {
     if (errors.empty()) {
         out_mean = 0.0;
         out_variance = 0.0;
         return;
     }
-
     double sum = std::accumulate(errors.begin(), errors.end(), 0.0);
     out_mean = sum / errors.size();
-
     double sq_sum = 0.0;
     for (double err : errors) {
         sq_sum += (err - out_mean) * (err - out_mean);
     }
-    // 使用 n-1 作为分母（样本方差），如果需要总体方差则用 errors.size()
     if (errors.size() > 1) {
         out_variance = sq_sum / (errors.size() - 1);
     }
     else {
-        out_variance = 0.0; // 无法计算方差
+        out_variance = 0.0;
     }
 }
 
-/**
- * @brief (Prompt 8) 运行单次测量流程。
- *
- * 图像生成 -> 预处理 -> 粗定位 -> 精定位 -> 计算误差
- */
+// [修改] 增加 useYolo 参数
 bool runSingleMeasurement(
     ImageSimulator& simulator,
     ImagePreprocessor& preprocessor,
@@ -61,91 +45,112 @@ bool runSingleMeasurement(
     double true_dx_um,
     double true_dy_um,
     int modelType,
+    bool useYolo,
     double& out_error_x,
     double& out_error_y)
 {
-    // 1. 生成图像 (Prompt 8.1)
-    // 论文使用 766x576，我们使用 800x600 保持一致性
+    // 1. 生成图像
     cv::Mat testImg = simulator.generateStandardWaferImage(800, 600, true_dx_um, true_dy_um);
 
-    // 准备用于拟合的原始灰度图 (无增强)
-    // (论文 4.1 节指出拟合是在预处理后的数据上，但灰度模型应在未增强的数据上拟合效果更好)
-    // 我们遵循论文 3.2 节的流程，使用预处理后的数据
+    // 2. 预处理
     cv::Mat processedImg = preprocessor.preprocess(testImg);
-
-    // 准备用于灰度模型拟合的"原始"灰度图 (仅滤波，不增强)
     cv::Mat grayImg;
     if (testImg.channels() != 1) cv::cvtColor(testImg, grayImg, cv::COLOR_BGR2GRAY);
     else grayImg = testImg.clone();
-    cv::medianBlur(grayImg, grayImg, 3); // 仅做中值滤波
-
+    cv::medianBlur(grayImg, grayImg, 3);
 
     // 准备梯度图
     cv::Mat gradX = GradientUtils::applySobel(processedImg, 1, 0);
     cv::Mat gradY = GradientUtils::applySobel(processedImg, 0, 1);
 
-    // 3. 粗定位 (Prompt 8.1)
-    CoarseEdges coarseEdges = localizer.coarseLocalization(processedImg);
+    // 3. 粗定位 [核心修改部分]
+    CoarseEdges coarseEdges;
+    if (useYolo) {
+        // 使用 YOLO 进行粗定位
+        // 注意：YOLO 通常在彩色图或原始图上效果更好，所以传入 testImg
+        coarseEdges = localizer.coarseLocalizationYolo(testImg);
+    }
+    else {
+        // 传统的模板匹配
+        coarseEdges = localizer.coarseLocalization(processedImg);
+    }
+
     if (coarseEdges.x1 == -1 || coarseEdges.y1 == -1) {
-        std::cerr << "粗定位失败！" << std::endl;
+        // std::cerr << "粗定位失败！" << std::endl;
         return false;
     }
 
-    // 4. 精定位 (Prompt 8.1)
-    // 注意：传递 grayImg 用于灰度模型, 传递 gradX/Y 用于梯度模型
+    // 4. 精定位
     FineEdges fineEdges = localizer.fineLocalization(grayImg, gradX, gradY, coarseEdges, modelType);
 
-    // 5. 得到结果 (Prompt 8.1)
-    // (论文 6.3.1 节, 公式 6.1)
-    // dx = ( (x1+x4) - (x2+x3) ) / 2
+    // 5. 得到结果
     double measured_dx_px = ((fineEdges.x1 + fineEdges.x4) - (fineEdges.x2 + fineEdges.x3)) / 2.0;
     double measured_dy_px = ((fineEdges.y1 + fineEdges.y4) - (fineEdges.y2 + fineEdges.y3)) / 2.0;
 
     double measured_dx_um = measured_dx_px * simulator.PIX_TO_UM_FACTOR;
     double measured_dy_um = measured_dy_px * simulator.PIX_TO_UM_FACTOR;
 
-    // 计算误差
     out_error_x = measured_dx_um - true_dx_um;
     out_error_y = measured_dy_um - true_dy_um;
 
     return true;
 }
 
-
 int main() {
-    std::cout << "--- 复现论文第6章实验 (Prompt 8) ---" << std::endl;
+    std::cout << "--- 复现论文第6章实验 (Prompt 8) + YOLO优化 ---" << std::endl;
 
-    // (Prompt 8.1) 初始化所有类
-    ImageSimulator simulator(766, 50.0); // (论文 6.1 节, 766px = 50um)
+    ImageSimulator simulator(766, 50.0);
     ImagePreprocessor preprocessor;
     Localization localizer;
 
-    // 创建 (0,0) 模板
-    std::cout << "正在创建 (0,0) 模板..." << std::endl;
-    cv::Mat templateImg = simulator.generateStandardWaferImage(800, 600, 0.0, 0.0);
-    if (!localizer.createTemplate(templateImg, preprocessor)) {
-        std::cerr << "无法启动实验：模板创建失败。" << std::endl;
-        return -1;
-    }
-    std::cout << "模板创建完毕，开始模拟实验..." << std::endl;
+    //std::string datasetRoot = "E:/杂项/TestImage/datasets/wafer_project";
+    //simulator.generateDataset(500, datasetRoot + "/train/images", datasetRoot + "/train/labels");
 
-    // (Prompt 8) 定义实验组 (来自论文 6.1 节)
+    //// 生成 100 张验证集
+    //simulator.generateDataset(100, datasetRoot + "/val/images", datasetRoot + "/val/labels");
+
+    //std::cout << "数据准备完毕，可以直接开始 python train.py 了！" << std::endl;
+
+    //return 0;
+
+    // 配置
+    bool USE_YOLO = false; // [开关] 设置为 true 启用 YOLO，false 使用模板匹配
+    std::string yoloModelPath = "best.onnx"; // 请确保文件存在
+
+    if (USE_YOLO) {
+        std::cout << "正在初始化 YOLO 检测器..." << std::endl;
+        if (!localizer.initYoloModel(yoloModelPath)) {
+            std::cerr << "错误：无法加载 YOLO 模型 (" << yoloModelPath << ")。" << std::endl;
+            std::cerr << "提示：请先使用 Python 训练 YOLOv5 模型并导出为 ONNX，或将 USE_YOLO 设为 false 以使用传统算法。" << std::endl;
+            // 降级处理，或者直接退出
+            // return -1; 
+            std::cout << "切换回传统模板匹配模式。" << std::endl;
+            USE_YOLO = false;
+        }
+        else {
+            std::cout << "YOLO 模型加载成功。" << std::endl;
+        }
+    }
+
+    if (!USE_YOLO) {
+        std::cout << "正在创建 (0,0) 模板 (传统方法)..." << std::endl;
+        cv::Mat templateImg = simulator.generateStandardWaferImage(800, 600, 0.0, 0.0);
+        if (!localizer.createTemplate(templateImg, preprocessor)) {
+            std::cerr << "无法启动实验：模板创建失败。" << std::endl;
+            return -1;
+        }
+    }
+
     std::vector<std::pair<double, double>> errorGroups = {
-        {0.0, 0.0},
-        {-0.5, -1.0},
-        {-1.0, 0.0},
-        {-1.0, 0.1},
-        {-1.0, -0.1},
-        {-1.0, 0.5},
-        {-1.0, 1.0},
-        {-1.0, -1.0}
+        {0.0, 0.0}, {-0.5, -1.0}, {-1.0, 0.0}, {-1.0, 0.1},
+        {-1.0, -0.1}, {-1.0, 0.5}, {-1.0, 1.0}, {-1.0, -1.0}
     };
 
-    int runsPerGroup = 5; // (论文 6.1 节, 每组5张图像)
-    int modelToTest = 0;  // 0 = Sigmoid (论文首选, 表 6.5)
+    int runsPerGroup = 5;
+    int modelToTest = 0; // Sigmoid
 
     std::cout << std::fixed << std::setprecision(6);
-    std::cout << "\n--- 正在复现 Sigmoid 模型 (表 6.5 和 6.9) ---" << std::endl;
+    std::cout << "\n--- 开始实验 (" << (USE_YOLO ? "YOLO Coarse" : "Template Coarse") << " + Sigmoid Fine) ---" << std::endl;
     std::cout << "----------------------------------------------------------------------------------" << std::endl;
     std::cout << std::setw(15) << "标准误差 (um)"
         << std::setw(18) << "平均误差 X (um)"
@@ -167,11 +172,12 @@ int main() {
 
         for (int i = 0; i < runsPerGroup; ++i) {
             double error_x, error_y;
-            if (runSingleMeasurement(simulator, preprocessor, localizer, true_dx, true_dy, modelToTest, error_x, error_y)) {
+            // 传入 USE_YOLO 标志
+            if (runSingleMeasurement(simulator, preprocessor, localizer, true_dx, true_dy, modelToTest, USE_YOLO, error_x, error_y)) {
                 group_errors_x.push_back(error_x);
                 group_errors_y.push_back(error_y);
-                total_errors_x.push_back(std::abs(error_x)); // 记录绝对误差以计算总平均误差
-                total_errors_y.push_back(std::abs(error_y)); // 记录绝对误差以计算总平均误差
+                total_errors_x.push_back(std::abs(error_x));
+                total_errors_y.push_back(std::abs(error_y));
             }
         }
 
@@ -183,44 +189,24 @@ int main() {
         std::cout << std::setw(15) << group_str
             << std::setw(18) << mean_x
             << std::setw(18) << mean_y
-            << std::setw(18) << var_x * 100000.0 // 转换为 10e-5
-            << std::setw(18) << var_y * 100000.0 // 转换为 10e-5
+            << std::setw(18) << var_x * 100000.0
+            << std::setw(18) << var_y * 100000.0
             << std::endl;
     }
 
-    // (Prompt 8.1) 计算总平均值和方差
-    // 注意：表 6.5 的“平均值”是“平均误差”(Mean Error)，而不是“平均绝对误差”(Mean Absolute Error)
-    // 论文中的平均误差很小（0.004801 um），这表明正负误差抵消了。
-    // 我们计算总的“平均绝对误差”和总的“方差”
-
     double total_mean_abs_error_x, total_var_x_all;
     double total_mean_abs_error_y, total_var_y_all;
-
-    // 计算总平均绝对误差
     calculateStatistics(total_errors_x, total_mean_abs_error_x, total_var_x_all);
     calculateStatistics(total_errors_y, total_mean_abs_error_y, total_var_y_all);
-
-    // 论文表 6.9 的方差是组内方差的平均值，还是所有样本的总方差？这不明确。
-    // 我们这里显示总的平均绝对误差和总的方差。
 
     std::cout << "----------------------------------------------------------------------------------" << std::endl;
     std::cout << std::setw(15) << "总平均绝对误差"
         << std::setw(18) << total_mean_abs_error_x
         << std::setw(18) << total_mean_abs_error_y
-        << std::setw(18) << "---"
-        << std::setw(18) << "---"
-        << std::endl;
-    std::cout << std::setw(15) << "总样本方差"
-        << std::setw(18) << "---"
-        << std::setw(18) << "---"
-        << std::setw(18) << total_var_x_all * 100000.0
-        << std::setw(18) << total_var_y_all * 100000.0
-        << std::endl;
-    std::cout << "----------------------------------------------------------------------------------" << std::endl;
+        << std::setw(18) << "---" << std::setw(18) << "---" << std::endl;
 
     std::cout << "\n实验完成。请按 Enter 键退出..." << std::endl;
     std::cin.get();
 
     return 0;
 }
-

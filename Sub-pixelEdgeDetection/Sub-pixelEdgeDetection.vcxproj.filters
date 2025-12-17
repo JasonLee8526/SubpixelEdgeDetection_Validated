@@ -33,6 +33,9 @@
     <ClCompile Include="ImageUtils.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="YoloDetector.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ImageSimulator.h">
@@ -48,6 +51,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ImageUtils.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="YoloDetector.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

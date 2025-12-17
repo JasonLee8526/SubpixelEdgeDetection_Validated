@@ -3,6 +3,7 @@
 #include <opencv2/opencv.hpp>
 #include <vector>
 #include "SubPixelModel.h"
+#include "YoloDetector.h" // [新增] 引入YOLO头文件
 
 /**
  * @struct CoarseEdges
@@ -24,35 +25,40 @@ struct FineEdges {
 
 /**
  * @class Localization
- * @brief (Prompt 6, 7) 负责粗定位和精定位的主类。
+ * @brief 负责粗定位和精定位的主类。
  */
 class Localization {
 public:
-    Localization() : m_templateWindow(15), m_subPixelWindow(20) {}
+    Localization();
 
     /**
-     * @brief (Prompt 6.2) 从标准图像创建 RMS 梯度模板。
-     * @param standardImage 一张 (0,0) 误差的标准图像。
-     * @param preprocessor 图像预处理器实例。
-     * @return bool 是否成功创建模板。
+     * @brief [修改] 初始化YOLO模型
+     * @param modelPath 模型路径
+     */
+    bool initYoloModel(const std::string& modelPath);
+
+    /**
+     * @brief 从标准图像创建 RMS 梯度模板 (原有方法)。
      */
     bool createTemplate(const cv::Mat& standardImage, class ImagePreprocessor& preprocessor);
 
     /**
-     * @brief (Prompt 6) 执行像素级粗定位。
-     * @param processedImg 预处理后的待测图像。
-     * @return CoarseEdges 8条边的像素级位置。
+     * @brief 执行像素级粗定位 (模板匹配 - 原有方法)。
      */
     CoarseEdges coarseLocalization(const cv::Mat& processedImg);
 
     /**
-     * @brief (Prompt 7) 执行亚像素级精定位。
-     * @param originalImg *未*增强的原始灰度图 (用于灰度模型拟合)。
-     * @param gradImgX X方向梯度图 (用于梯度模型拟合)。
-     * @param gradImgY Y方向梯度图。
-     * @param coarseEdges 粗定位结果。
-     * @param modelType 要使用的模型 (0=Sigmoid, 1=Quadratic, ...)。
-     * @return FineEdges 8条边的亚像素级位置。
+     * @brief [新增] 使用YOLO进行粗定位
+     * * 优化策略：
+     * 1. 使用YOLO检测出内框和外框。
+     * 2. 根据框的几何位置提取8条边缘的坐标。
+     * * @param originalImg 原始图像(YOLO通常需要3通道，或者内部转换)
+     * @return CoarseEdges
+     */
+    CoarseEdges coarseLocalizationYolo(const cv::Mat& originalImg);
+
+    /**
+     * @brief 执行亚像素级精定位。
      */
     FineEdges fineLocalization(
         const cv::Mat& originalImg,
@@ -61,26 +67,17 @@ public:
         const CoarseEdges& coarseEdges,
         int modelType);
 
-    /**
-     * @brief (Prompt 7.2) 提取数据用于拟合。
-     * @param rmsData RMS 向量 (灰度或梯度)。
-     * @param center 粗定位的中心点。
-     * @return std::vector<double> 41个数据点。
-     */
     std::vector<double> extractData(const std::vector<double>& rmsData, int center);
 
-
 private:
-    std::vector<double> m_templateRMS_X; ///< X方向的模板
-    std::vector<double> m_templateRMS_Y; ///< Y方向的模板
-    int m_templateWindow; ///< (论文 3.3.3) 模板截取窗口
-    int m_subPixelWindow; ///< (论文 4.1) 亚像素截取窗口 (20)
+    std::vector<double> m_templateRMS_X;
+    std::vector<double> m_templateRMS_Y;
+    int m_templateWindow;
+    int m_subPixelWindow;
 
-    /**
-     * @brief (Prompt 6.3, 6.4) 查找最佳模板匹配位置和峰值。
-     * @param rmsData 待测图像的 RMS 梯度。
-     * @param templateData 模板 RMS 梯度。
-     * @return std::vector<int> 4个峰值的像素位置。
-     */
+    // [新增] YOLO检测器实例
+    YoloDetector m_yoloDetector;
+    bool m_useYolo;
+
     std::vector<int> findTemplateMatchingPeaks(const std::vector<double>& rmsData, const std::vector<double>& templateData);
 };

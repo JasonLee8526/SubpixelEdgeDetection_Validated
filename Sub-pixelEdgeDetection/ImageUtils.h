@@ -1,6 +1,7 @@
 #pragma once
 
 #include <opencv2/opencv.hpp>
+#include <string> // (新增) 包含 string 头文件
 
 /**
  * @class FilterUtils
@@ -55,3 +56,17 @@ private:
     cv::Mat ensureGrayscale(const cv::Mat& input);
 };
 
+
+/**
+ * @class ImageIOUtils
+ * @brief (新增) 存放图像 I/O (保存/加载) 操作的公共类。
+ */
+class ImageIOUtils {
+public:
+    /**
+     * @brief 将图像保存到指定文件夹，并使用当前时间戳命名。
+     * @param image 要保存的 cv::Mat 图像。
+     * @param outputFolder 目标文件夹 (例如 "simulated_images")。
+     */
+    static void saveImageWithTimestamp(const cv::Mat& image, const std::string& outputFolder);
+};
