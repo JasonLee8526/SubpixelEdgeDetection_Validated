@@ -135,6 +135,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SubPixelModel.cpp" />
     <ClCompile Include="Utilities.cpp" />
+    <ClCompile Include="WaferConfig.cpp" />
     <ClCompile Include="YoloDetector.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -143,6 +144,7 @@
     <ClInclude Include="Localization.h" />
     <ClInclude Include="SubPixelModel.h" />
     <ClInclude Include="Utilities.h" />
+    <ClInclude Include="WaferConfig.h" />
     <ClInclude Include="YoloDetector.h" />
   </ItemGroup>
   <ItemGroup>
