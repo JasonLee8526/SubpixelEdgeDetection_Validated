@@ -44,13 +44,29 @@ cv::Point Localization::coarseLocalization(const cv::Mat& image) {
     return maxLoc;
 }
 
+// [核心修正] YOLO 粗定位
 cv::Point Localization::coarseLocalizationYolo(const cv::Mat& image, YoloDetector* detector) {
     if (!detector) return Point(0, 0);
+
+    // 1. 获取 YOLO 检测框 (通常是紧贴外框的 200x200 区域)
     Rect box = detector->detect(image);
-    return box.tl();
+
+    if (box.area() == 0) return Point(0, 0); // 未检测到
+
+    // 2. 计算物理中心点
+    Point center(box.x + box.width / 2, box.y + box.height / 2);
+
+    // 3. 转换为 "虚拟模板左上角"
+    // fineLocalization 的逻辑是：center = coarsePos + (WAFER_SIZE/2, WAFER_SIZE/2)
+    // 所以我们需要返回： coarsePos = center - (WAFER_SIZE/2, WAFER_SIZE/2)
+    // 这样无论用模板还是用 YOLO，传给精定位的坐标基准都是一致的
+    Point virtualTemplateTL = center - Point(WaferConfig::WAFER_SIZE / 2, WaferConfig::WAFER_SIZE / 2);
+
+    return virtualTemplateTL;
 }
 
 cv::Point2d Localization::fineLocalization(const cv::Mat& image, cv::Point coarsePos, SubPixelModel::ModelType type) {
+    // 1. 推算物理中心
     Point centerPos = coarsePos + Point(WaferConfig::WAFER_SIZE / 2, WaferConfig::WAFER_SIZE / 2);
 
     if (centerPos.x < 0 || centerPos.x >= image.cols || centerPos.y < 0 || centerPos.y >= image.rows) {
@@ -63,16 +79,14 @@ cv::Point2d Localization::fineLocalization(const cv::Mat& image, cv::Point coars
     auto measureEdge = [&](int offset, int direction) -> double {
         Point roiCenter;
         Rect roiRect;
-
-        // 确保 ROI 足够长，以便让矩方法计算重心时有足够的背景参考
         int searchLen = ROI_SEARCH_LEN;
 
-        if (direction == 0) { // X方向测量
+        if (direction == 0) {
             roiCenter = centerPos + Point(offset, 0);
             roiRect = Rect(roiCenter.x - searchLen / 2, roiCenter.y - ROI_SEARCH_WID / 2,
                 searchLen, ROI_SEARCH_WID);
         }
-        else { // Y方向测量
+        else {
             roiCenter = centerPos + Point(0, offset);
             roiRect = Rect(roiCenter.x - ROI_SEARCH_WID / 2, roiCenter.y - searchLen / 2,
                 ROI_SEARCH_WID, searchLen);
@@ -81,11 +95,14 @@ cv::Point2d Localization::fineLocalization(const cv::Mat& image, cv::Point coars
         roiRect = roiRect & Rect(0, 0, image.cols, image.rows);
         if (roiRect.area() == 0) return -999.0;
 
-        Mat roi = image(roiRect);
+        Mat roi = image(roiRect).clone();
+
+        // 核心：中值滤波去除椒盐噪声
+        medianBlur(roi, roi, 5);
+
         Mat projectionMat;
         vector<double> profile;
 
-        // 计算投影
         if (direction == 0) reduce(roi, projectionMat, 0, REDUCE_AVG, CV_64F);
         else                reduce(roi, projectionMat, 1, REDUCE_AVG, CV_64F);
 
@@ -96,14 +113,10 @@ cv::Point2d Localization::fineLocalization(const cv::Mat& image, cv::Point coars
             return -999.0;
         }
 
-        // 梯度检查
         double pMin, pMax;
         minMaxLoc(projectionMat, &pMin, &pMax);
-        // 如果对比度太低，视为无效
         if ((pMax - pMin) < EDGE_GRADIENT_THRESHOLD) return -999.0;
 
-        // 计算亚像素位置 (相对于 ROI 起点)
-        // 这里的 model->calculateEdge 已经改为调用 momentMethod
         double subPixelRel = model->calculateEdge(profile, type);
 
         if (subPixelRel == -999.0) return -999.0;
@@ -116,7 +129,6 @@ cv::Point2d Localization::fineLocalization(const cv::Mat& image, cv::Point coars
     double x_in_L = measureEdge(-innerRadius, 0);
     double x_in_R = measureEdge(innerRadius, 0);
 
-    // Y 方向
     double y_out_T = measureEdge(-outerRadius, 1);
     double y_out_B = measureEdge(outerRadius, 1);
     double y_in_T = measureEdge(-innerRadius, 1);

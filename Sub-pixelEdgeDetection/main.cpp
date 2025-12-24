@@ -1,4 +1,5 @@
-﻿#include <iostream>
+﻿#define _CRT_SECURE_NO_WARNINGS // 禁用 fopen 等不安全函数的警告
+#include <iostream>
 #include <vector>
 #include <string>
 #include <iomanip>
@@ -12,7 +13,7 @@
 #include "SubPixelModel.h"
 #include "Utilities.h"
 #include "WaferConfig.h" // 引入配置
-
+#include "YoloDetector.h"
 using namespace std;
 using namespace cv;
 
@@ -234,7 +235,6 @@ struct TestCase {
 /// <summary>
 /// 论文中的传统方法
 /// </summary>
-
 void TraditionalMethodTest() {
     cout << "================================================================================" << endl;
     cout << "   Sub-pixel Validation (Systematic Test Cases from Literature)    " << endl;
@@ -291,7 +291,7 @@ void TraditionalMethodTest() {
 
         // 保持 0 噪声和 0 旋转，专注于验证几何算法的正确性
         // 使用 50x 超采样 (ImageSimulator 内部实现)
-        Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, 0.1, 0);
+        Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, 0.1,0,50,0.2);
 
         string filename = saveDir + "/Case_" + to_string(i) + ".png";
         imwrite(filename, testImg);
@@ -347,11 +347,173 @@ void TraditionalMethodTest() {
     return;
 }
 
+/// <summary>
+/// 
+/// </summary>
+void GenerateTrainingImg() {
+        ImageSimulator simulator;
+    
+        std::string datasetRoot = "E:/杂项/TestImage/datasets/wafer_project";
+        simulator.generateDataset(1500, datasetRoot + "/train/images", datasetRoot + "/train/labels");
+        simulator.generateDataset(300, datasetRoot + "/val/images", datasetRoot + "/val/labels");
+    
+        std::cout << "数据准备完毕，可以直接开始 python train.py 了！" << std::endl;
+    
+        return;
+}
+
+/// <summary>
+/// 
+/// </summary>
+void Yolo8CoarseMthodTest() {
+    cout << "================================================================================" << endl;
+    cout << "   Sub-pixel Validation (YOLO Coarse Search + Sigmoid Fine Search)    " << endl;
+    cout << "================================================================================" << endl;
+
+    ImageSimulator simulator;
+    Localization localization;
+    YoloDetector* yolo = nullptr;
+
+    // 1. 加载 YOLO 模型
+    string modelPath = "best.onnx";
+    // 简单检查文件是否存在
+    FILE* f = fopen(modelPath.c_str(), "rb");
+    if (f) {
+        fclose(f);
+        try {
+            yolo = new YoloDetector(modelPath);
+            cout << "[Init] YOLO model '" << modelPath << "' loaded successfully." << endl;
+        }
+        catch (const cv::Exception& e) {
+            cout << "[Error] OpenCV DNN Exception: " << e.what() << endl;
+        }
+        catch (...) {
+            cout << "[Error] Failed to initialize YOLO detector." << endl;
+        }
+    }
+    else {
+        cout << "[Warning] 'best.onnx' not found. Coarse search will FAIL." << endl;
+    }
+
+    string saveDir = "TestImages_YOLO";
+    _mkdir(saveDir.c_str());
+
+    // 2. 构建系统性测试用例 (X/Y 方向 0.1 - 1.0)
+    vector<TestCase> testCases;
+
+    // Case Group 0: 零偏移基准
+    testCases.push_back({ 0.0, 0.0, "Zero Reference" });
+
+    // Case Group 1: X轴 亚像素线性测试 (0.1 - 1.0)
+    // 验证算法对微小增量的敏感度
+    for (int i = 1; i <= 10; ++i) {
+        double val = i * 0.1;
+        testCases.push_back({ val, 0.0, "X-Axis Step " + to_string(val).substr(0,3) });
+    }
+
+    // Case Group 2: Y轴 亚像素线性测试 (0.1 - 1.0)
+    for (int i = 1; i <= 10; ++i) {
+        double val = i * 0.1;
+        testCases.push_back({ 0.0, val, "Y-Axis Step " + to_string(val).substr(0,3) });
+    }
+
+    // Case Group 3: 典型混合场景
+    testCases.push_back({ 0.25, 0.25, "Quarter Shift" });
+    testCases.push_back({ 0.50, 0.50, "Half Shift" });  // 0.5通常是很多插值算法的难点
+    testCases.push_back({ 0.75, 0.75, "3/4 Shift" });
+    testCases.push_back({ 1.50, 1.50, "Large Shift" });
+
+    int numTests = testCases.size();
+    int successCount = 0;
+
+    cout << "\n[Start Testing] Running " << numTests << " tests using YOLO..." << endl;
+    cout << setfill('-') << setw(110) << "-" << setfill(' ') << endl;
+    cout << "| ID | Desc             | True X  | True Y  | Meas X  | Meas Y  | Err X   | Err Y   | Status |" << endl;
+    cout << setfill('-') << setw(110) << "-" << setfill(' ') << endl;
+
+    for (int i = 0; i < numTests; ++i) {
+        double trueShiftX = testCases[i].shiftX;
+        double trueShiftY = testCases[i].shiftY;
+
+        // 生成模拟图像
+        // 使用 0.5 的噪声等级来模拟真实情况，验证 YOLO 的鲁棒性
+        // 使用 scale=5 (快速模式) 生成图片
+        Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, 0.5, 0,5,0.2);
+
+        // 保存生成的图片用于检查
+        string filename = saveDir + "/Yolo_Case_" + to_string(i) + ".png";
+        imwrite(filename, testImg);
+
+        // ==========================================
+        // 核心变化: 使用 YOLO 进行粗定位
+        // ==========================================
+        Point coarsePos(0, 0);
+        if (yolo) {
+            // 调用我们之前修改好的 coarseLocalizationYolo
+            // 它会自动将 YOLO 的中心转换为精定位所需的 TopLeft 锚点
+            coarsePos = localization.coarseLocalizationYolo(testImg, yolo);
+        }
+
+        // 精定位 (保持 Sigmoid 不变)
+        // 注意：如果 YOLO 返回 (0,0)，fineLocalization 内部会进行边界检查并返回 -999
+        Point2d measured = localization.fineLocalization(testImg, coarsePos, SubPixelModel::Sigmoid);
+
+        bool success = (measured.x != -999.0);
+        double errX = 0.0, errY = 0.0;
+        string statusStr = "FAIL";
+
+        if (success) {
+            errX = abs(measured.x - trueShiftX);
+            errY = abs(measured.y - trueShiftY);
+
+            // 判定标准: 单轴误差 < 0.1 px (考虑到 YOLO 框可能有微小抖动，稍微放宽一点点或保持 0.05)
+            // 之前的纯几何验证可以达到 0.05，这里我们先看 0.1
+            if (errX < 0.1 && errY < 0.1) {
+                statusStr = "PASS";
+                successCount++;
+            }
+            else {
+                statusStr = "WARN";
+            }
+        }
+        else {
+            if (!yolo) statusStr = "NO_MDL";
+            else statusStr = "MISS"; // YOLO 没检测到
+        }
+
+        // 格式化输出
+        cout << "| " << setw(2) << i << " | "
+            << setw(16) << left << testCases[i].description << right << " | "
+            << fixed << setprecision(3)
+            << setw(7) << trueShiftX << " | "
+            << setw(7) << trueShiftY << " | "
+            << setw(7) << (success ? measured.x : 0) << " | "
+            << setw(7) << (success ? measured.y : 0) << " | "
+            << setw(7) << (success ? errX : 0) << " | "
+            << setw(7) << (success ? errY : 0) << " | "
+            << setw(6) << statusStr << " |" << endl;
+    }
+
+    cout << setfill('-') << setw(110) << "-" << setfill(' ') << endl;
+    cout << "\n[Summary] Success: " << successCount << "/" << numTests << endl;
+
+    if (yolo) delete yolo;
+
+    cout << "\nPress Enter to exit..." << endl;
+    cin.get();
+
+    return;
+}
 
 int main() {
+    //训练数据
+    //GenerateTrainingImg();
 
     //传统方法
-    TraditionalMethodTest();
+    //TraditionalMethodTest();
+
+    //yolo
+    Yolo8CoarseMthodTest();
 }
 
 
