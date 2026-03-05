@@ -100,6 +100,9 @@ cv::Point2d Localization::fineLocalization(const cv::Mat& image, cv::Point coars
         // 核心：中值滤波去除椒盐噪声
         medianBlur(roi, roi, 5);
 
+        // 2. [新增] 再用高斯滤波平滑台阶，让梯度分布更符合矩方法预期
+        GaussianBlur(roi, roi, Size(3, 3), 0.5);
+
         Mat projectionMat;
         vector<double> profile;
 

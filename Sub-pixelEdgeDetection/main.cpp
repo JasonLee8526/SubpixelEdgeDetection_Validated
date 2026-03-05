@@ -229,6 +229,10 @@ using namespace cv;
 struct TestCase {
     double shiftX;
     double shiftY;
+    double noiseLevel;
+    double angle;
+    double targetScale;
+    double spChance;
     string description;
 };
 
@@ -255,26 +259,32 @@ void TraditionalMethodTest() {
     vector<TestCase> testCases;
 
     // Case Group 0: 零偏移基准
-    testCases.push_back({ 0.0, 0.0, "Zero Reference" });
+    testCases.push_back({ 0.0, 0.0,0.1,0,50,0, "Zero Reference" });
+
+    double testNoiseLevel = 0.1;
+    double testAngle = 0;
+    double testTargetScale = 10;
+    double testSPChance = 0;
+
 
     // Case Group 1: X轴 亚像素线性测试 (0.1 - 1.0)
     // 验证算法对微小增量的敏感度
     for (int i = 1; i <= 10; ++i) {
         double val = i * 0.1;
-        testCases.push_back({ val, 0.0, "X-Axis Step " + to_string(val).substr(0,3) });
+        testCases.push_back({ val, 0.0,testNoiseLevel,testAngle,testTargetScale,testSPChance, "X-Axis Step " + to_string(val).substr(0,3) });
     }
 
     // Case Group 2: Y轴 亚像素线性测试 (0.1 - 1.0)
     for (int i = 1; i <= 10; ++i) {
         double val = i * 0.1;
-        testCases.push_back({ 0.0, val, "Y-Axis Step " + to_string(val).substr(0,3) });
+        testCases.push_back({ 0.0, val,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Y-Axis Step " + to_string(val).substr(0,3) });
     }
 
     // Case Group 3: 典型混合场景
-    testCases.push_back({ 0.25, 0.25, "Quarter Shift" });
-    testCases.push_back({ 0.50, 0.50, "Half Shift" });  // 0.5通常是很多插值算法的难点
-    testCases.push_back({ 0.75, 0.75, "3/4 Shift" });
-    testCases.push_back({ 1.50, 1.50, "Large Shift" });
+    testCases.push_back({ 0.25, 0.25,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Quarter Shift" });
+    testCases.push_back({ 0.50, 0.50,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Half Shift" });  // 0.5通常是很多插值算法的难点
+    testCases.push_back({ 0.75, 0.75,testNoiseLevel,testAngle,testTargetScale,testSPChance, "3/4 Shift" });
+    testCases.push_back({ 1.50, 1.50,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Large Shift" });
 
     int numTests = testCases.size();
     int successCount = 0;
@@ -291,13 +301,16 @@ void TraditionalMethodTest() {
 
         // 保持 0 噪声和 0 旋转，专注于验证几何算法的正确性
         // 使用 50x 超采样 (ImageSimulator 内部实现)
-        Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, 0.1,0,50,0.2);
+        Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, testCases[i].noiseLevel, testAngle, testCases[i].targetScale, testCases[i].spChance);
 
         string filename = saveDir + "/Case_" + to_string(i) + ".png";
         imwrite(filename, testImg);
 
-        Point coarsePos = localization.coarseLocalization(testImg);
-        Point2d measured = localization.fineLocalization(testImg, coarsePos, SubPixelModel::Sigmoid);
+        Mat processedImg;
+        medianBlur(testImg, processedImg, 5);
+
+        Point coarsePos = localization.coarseLocalization(processedImg);
+        Point2d measured = localization.fineLocalization(processedImg, coarsePos, SubPixelModel::Sigmoid);
 
         bool success = (measured.x != -999.0);
         double errX = 0.0, errY = 0.0;
@@ -402,26 +415,31 @@ void Yolo8CoarseMthodTest() {
     vector<TestCase> testCases;
 
     // Case Group 0: 零偏移基准
-    testCases.push_back({ 0.0, 0.0, "Zero Reference" });
+    testCases.push_back({ 0.0, 0.0,0.1,0,50,0, "Zero Reference" });
+
+    double testNoiseLevel = 0.1;
+    double testAngle = 0;
+    double testTargetScale = 50;
+    double testSPChance = 0.2;
 
     // Case Group 1: X轴 亚像素线性测试 (0.1 - 1.0)
     // 验证算法对微小增量的敏感度
     for (int i = 1; i <= 10; ++i) {
         double val = i * 0.1;
-        testCases.push_back({ val, 0.0, "X-Axis Step " + to_string(val).substr(0,3) });
+        testCases.push_back({ val, 0.0,testNoiseLevel,testAngle,testTargetScale,testSPChance, "X-Axis Step " + to_string(val).substr(0,3) });
     }
 
     // Case Group 2: Y轴 亚像素线性测试 (0.1 - 1.0)
     for (int i = 1; i <= 10; ++i) {
         double val = i * 0.1;
-        testCases.push_back({ 0.0, val, "Y-Axis Step " + to_string(val).substr(0,3) });
+        testCases.push_back({ 0.0, val,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Y-Axis Step " + to_string(val).substr(0,3) });
     }
 
     // Case Group 3: 典型混合场景
-    testCases.push_back({ 0.25, 0.25, "Quarter Shift" });
-    testCases.push_back({ 0.50, 0.50, "Half Shift" });  // 0.5通常是很多插值算法的难点
-    testCases.push_back({ 0.75, 0.75, "3/4 Shift" });
-    testCases.push_back({ 1.50, 1.50, "Large Shift" });
+    testCases.push_back({ 0.25, 0.25,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Quarter Shift" });
+    testCases.push_back({ 0.50, 0.50,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Half Shift" });  // 0.5通常是很多插值算法的难点
+    testCases.push_back({ 0.75, 0.75,testNoiseLevel,testAngle,testTargetScale,testSPChance, "3/4 Shift" });
+    testCases.push_back({ 1.50, 1.50,testNoiseLevel,testAngle,testTargetScale,testSPChance, "Large Shift" });
 
     int numTests = testCases.size();
     int successCount = 0;
@@ -438,11 +456,15 @@ void Yolo8CoarseMthodTest() {
         // 生成模拟图像
         // 使用 0.5 的噪声等级来模拟真实情况，验证 YOLO 的鲁棒性
         // 使用 scale=5 (快速模式) 生成图片
-        Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, 0.5, 0,5,0.2);
+        Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, testCases[i].noiseLevel, testCases[i].angle, testCases[i].targetScale, testCases[i].spChance);
+        //Mat testImg = simulator.generateWaferImage(640, trueShiftX, trueShiftY, 0.5, 0,50,0.2);
 
         // 保存生成的图片用于检查
         string filename = saveDir + "/Yolo_Case_" + to_string(i) + ".png";
         imwrite(filename, testImg);
+
+        Mat processedImg;
+        medianBlur(testImg, processedImg, 5);
 
         // ==========================================
         // 核心变化: 使用 YOLO 进行粗定位
