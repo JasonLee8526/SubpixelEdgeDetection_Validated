@@ -5,7 +5,6 @@ using namespace cv;
 using namespace cv::dnn;
 using namespace std;
 
-// 构造函数
 YoloDetector::YoloDetector(const string& modelPath) {
     try {
         net = readNetFromONNX(modelPath);
@@ -17,7 +16,7 @@ YoloDetector::YoloDetector(const string& modelPath) {
     }
 }
 
-// 保持长宽比的预处理 (Letterbox)
+// 保持长宽比的预处理
 Mat YoloDetector::formatToSquare(const Mat& source) {
     int col = source.cols;
     int row = source.rows;
@@ -27,27 +26,47 @@ Mat YoloDetector::formatToSquare(const Mat& source) {
     return result;
 }
 
-// 检测函数
 cv::Rect YoloDetector::detect(const cv::Mat& image) {
+    // 0. 安全检查
+    if (image.empty()) return Rect(0, 0, 0, 0);
     if (net.empty()) return Rect(0, 0, 0, 0);
 
+    // ==========================================
+    // [修复] 通道数适配
+    // 原因：ImageSimulator 生成的是单通道灰度图 (CV_8UC1)
+    // 但 YOLOv8 默认期望 3通道输入 (CV_8UC3)
+    // 如果直接传单通道，net.forward 会因为维度不匹配崩溃
+    // ==========================================
+    Mat input_image = image;
+    if (image.channels() == 1) {
+        cvtColor(image, input_image, COLOR_GRAY2BGR);
+    }
+
     // 1. 预处理
-    Mat modelInput = formatToSquare(image);
+    Mat modelInput = formatToSquare(input_image);
     Mat blob;
+
     // YOLOv8 默认输入 640x640，归一化 0-1
+    // swapRB=true: 将 BGR 转为 RGB (YOLO 训练时通常是 RGB)
     blobFromImage(modelInput, blob, 1.0 / 255.0, Size(640, 640), Scalar(), true, false);
     net.setInput(blob);
 
-    // 2. 推理
+    // 2. 推理 (此处之前报错)
     vector<Mat> outputs;
-    net.forward(outputs, net.getUnconnectedOutLayersNames());
+    try {
+        net.forward(outputs, net.getUnconnectedOutLayersNames());
+    }
+    catch (const cv::Exception& e) {
+        cerr << "[YoloError] Inference failed: " << e.what() << endl;
+        return Rect(0, 0, 0, 0);
+    }
 
-    // 3. 解析输出 (适配 YOLOv8 [1, 84, 8400] 格式)
+    // 3. 解析输出 (适配 YOLOv8 格式)
     Mat outputData = outputs[0];
     int dimensions = outputData.size[2];
     int rows = outputData.size[1];
 
-    // 维度转置处理 (确保 outputData 是 [8400 x 84])
+    // 维度转置
     if (dimensions > rows) {
         outputData = outputData.reshape(1, rows);
         cv::transpose(outputData, outputData);
@@ -64,7 +83,6 @@ cv::Rect YoloDetector::detect(const cv::Mat& image) {
     vector<float> confidences;
     vector<Rect> boxes;
 
-    // 遍历所有 Anchors (通常 8400 个)
     for (int i = 0; i < outputData.rows; ++i) {
         float* classes_scores = data + 4;
         Mat scores(1, outputData.cols - 4, CV_32FC1, classes_scores);
@@ -91,7 +109,7 @@ cv::Rect YoloDetector::detect(const cv::Mat& image) {
         data += outputData.cols;
     }
 
-    // 4. NMS (非极大值抑制)
+    // 4. NMS
     vector<int> nms_result;
     NMSBoxes(boxes, confidences, 0.45, 0.45, nms_result);
 
@@ -99,7 +117,6 @@ cv::Rect YoloDetector::detect(const cv::Mat& image) {
         return Rect(0, 0, 0, 0);
     }
 
-    // 5. 返回最佳结果 (置信度最高的一个)
-    // 这里直接返回 Rect，解决了 Localization.cpp 中的类型转换错误
+    // 返回最佳结果
     return boxes[nms_result[0]];
 }
